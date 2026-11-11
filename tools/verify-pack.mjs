@@ -42,7 +42,8 @@ function walk(d, out = []) {
   return out;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+if (process.argv[1] && real(process.argv[1]) === real(fileURLToPath(import.meta.url))) {
   const read = (rel) => { try { return fs.readFileSync(path.join(PACK, rel)); } catch { return null; } };
   const tracked = () => {
     const g = spawnSync('git', ['-C', PACK, 'ls-files', '-s'], { encoding: 'utf8' });

@@ -75,7 +75,8 @@ if (cmd === 'set') {
   if (arg('developer-token') || arg('client-secret')) die('For safety, secrets are never taken on the command line. Use --developer-token-file <file> or --client-secret-file <file> (or - for stdin).');
   if (secretArg('developer-token')) { const g = secret('google') || {}; saveSecret('google', { ...g, developer_token: secretArg('developer-token') }); console.log('Developer token saved privately.'); }
   const c = saveConfig(p);
-  console.log('Saved. Settings now:\n' + JSON.stringify(c, null, 1));
+  const shown = { ...c }; for (const k of ['notifyCmd', 'aiCmd']) if (shown[k]) shown[k] = '<set, hidden>';
+  console.log('Saved. Settings now:\n' + JSON.stringify(shown, null, 1));
   process.exit(0);
 }
 
@@ -101,7 +102,8 @@ if (cmd === 'connect') {
   if (!has('listen')) { console.log(`After Allow, your browser goes to ${REDIRECT}... and may show "can't connect". That is normal. Copy that whole address and run:\n  node pack.mjs connect --code "<paste it here>"`); process.exit(0); }
   // Same computer as the browser (Claude Code on the owner's machine): catch the answer by itself for 10 minutes.
   const srv = http.createServer(async (req, res) => {
-    const u = new URL(req.url, REDIRECT); const c = u.searchParams.get('code');
+    let u; try { u = new URL(req.url, REDIRECT); } catch { res.writeHead(400); res.end(); return; }
+    const c = u.searchParams.get('code');
     if (!c) { res.end('Waiting for Google...'); return; }
     let verifier; try { verifier = checkState(u.searchParams.get('state') || ''); } catch { res.writeHead(400, { 'Content-Type': 'text/plain' }); res.end('Ignored: this answer was not for this computer.'); return; }
     try { const who = await exchange(client, c, verifier); res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('Connected. You can close this tab.'); console.log(`CONNECTED as ${who || 'unknown account'}. Next: node pack.mjs doctor`); srv.close(); process.exit(0); }

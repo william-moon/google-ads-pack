@@ -313,6 +313,6 @@ async function main() {
   console.log(`Created PAUSED. Campaign ${campId} "${p.name}" (status now ${chk?.campaign?.status || 'unknown'}).\nTurn on with: node pack.mjs ads enable --campaign ${campId} --confirm (needs the owner's yes)`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
   try { await main(); } catch (e) { console.error(explain(e)); process.exit(1); }
 }

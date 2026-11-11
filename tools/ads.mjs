@@ -26,7 +26,7 @@
  * TARGET GUARD: negatives and account-negatives REFUSE any negative that would block a target or a protected (brand) word.
  * Pause, enable and budget change what the account spends: run them with --confirm only after the owner's plain yes.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { argv, arg, has, $, scrub } from '../lib/core.mjs';
 import { adsApi, search, mutate, customerId, dateRange, blocks } from '../lib/ads.mjs';
@@ -195,6 +195,6 @@ export function explain(e) {
   return 'ERROR ' + m;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   try { await main(); } catch (e) { console.error(explain(e)); process.exit(1); }
 }

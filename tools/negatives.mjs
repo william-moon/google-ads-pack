@@ -244,6 +244,6 @@ async function main() {
   else { console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('*/')[0].replace(/^#!.*\n\/\*\n?/, '').replace(/^ \* ?/gm, '')); if (cmd) process.exitCode = 2; }
 }
 import { pathToFileURL } from 'node:url';
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
   try { await main(); } catch (e) { console.error(explain(e)); process.exit(1); }
 }

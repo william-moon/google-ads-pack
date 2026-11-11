@@ -144,6 +144,6 @@ async function main() {
   if (cmd === 'weekly') await weekly();
   else { console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('*/')[0].replace(/^#!.*\n\/\*\n?/, '').replace(/^ \* ?/gm, '')); process.exitCode = 2; }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
   try { await main(); } catch (e) { console.error(explain(e)); process.exit(1); }
 }
