@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // build-manifest.mjs (maintainer only): writes manifest.json with a sha256 for every pack file, then signs it
 // into manifest.sig with the release PRIVATE key (never in this repo): GADS_SIGN_KEY=<path to ed25519 key .pem>.
-import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto';
-const PACK = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import { fileURLToPath } from 'node:url';
+const PACK = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = {};
 const walk = (d) => { for (const n of fs.readdirSync(d)) { if (n === '.git' || n === 'manifest.json' || n === 'manifest.sig' || n === 'node_modules') continue; const p = path.join(d, n); fs.statSync(p).isDirectory() ? walk(p) : (files[path.relative(PACK, p).split(path.sep).join('/')] = crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')); } };
 walk(PACK);

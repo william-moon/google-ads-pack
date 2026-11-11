@@ -64,8 +64,9 @@ if (cmd === 'set') {
   const p = {};
   if (arg('name')) p.businessName = arg('name');
   if (arg('domain')) p.domain = arg('domain').replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
-  if (arg('ads')) p.adsCustomerId = arg('ads').replace(/-/g, '');
-  if (arg('manager')) p.adsLoginCustomerId = arg('manager').replace(/-/g, '');
+  const adsId = (v, what) => { const d = String(v).replace(/-/g, ''); if (!/^\d{10}$/.test(d)) die(`${what} must be a 10 digit Google Ads id like 123-456-7890.`); return d; };
+  if (arg('ads')) p.adsCustomerId = adsId(arg('ads'), '--ads');
+  if (arg('manager')) p.adsLoginCustomerId = adsId(arg('manager'), '--manager');
   if (arg('business')) p.business = arg('business');
   for (const k of ['services', 'targets', 'protect', 'competitors', 'offNiche']) if (arg(k)) p[k] = list(arg(k));
   if (arg('timezone')) p.timezone = arg('timezone');
@@ -161,11 +162,12 @@ if (cmd === 'connect') {
       const r = spawnSync('schtasks', q, { encoding: 'utf8' }); console.log(n, r.status === 0 ? 'ok' : r.stderr);
     }
   } else {
+    if (/["%$`\\\n]/.test(node + me + logf + HOME)) die('The pack folder or Node path contains one of " % $ ` \\. Move the pack to a plain folder (for example ~/google-ads-pack) and run schedule again.');
     let cur = ''; try { cur = execFileSync('crontab', ['-l'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch {}
     const keep = cur.split('\n').filter((l) => l && !l.includes(tag));
     const add = has('remove') ? [] : [
-      `30 6 * * * "${node}" "${me}" daily >> "${logf}" 2>&1 ${tag} daily`,
-      `30 5 * * * "${node}" "${me}" update >> "${logf}" 2>&1 ${tag} update`,
+      `30 6 * * * GADS_HOME="${HOME}" "${node}" "${me}" daily >> "${logf}" 2>&1 ${tag} daily`,
+      `30 5 * * * GADS_HOME="${HOME}" "${node}" "${me}" update >> "${logf}" 2>&1 ${tag} update`,
     ];
     const r = spawnSync('crontab', ['-'], { input: [...keep, ...add].join('\n') + '\n', encoding: 'utf8' });
     if (r.status !== 0) die('Could not write the crontab: ' + r.stderr + '\nIf this is Claude Code without cron, ask Claude Code to create two scheduled tasks that run: node ' + me + ' daily (6:30 AM) and node ' + me + ' update (5:30 AM).', 1);
@@ -199,12 +201,13 @@ if (cmd === 'connect') {
   if (Number.isNaN(tNew) || Number.isNaN(tCur)) die('Update REFUSED: a build time is missing or unreadable. Kept the current version. If this keeps happening, reinstall with the git command in INSTALL.md.', 1);
   if (tNew === tCur) { console.log(`Up to date (${before}).`); process.exit(0); }
   if (tNew < tCur) die('Update REFUSED: the download is OLDER than this copy. Kept the current version.', 1);
+  if (String(git('status', '--porcelain', '--untracked-files=no').stdout).trim()) die('Update skipped: files in the pack folder were changed by hand. Settings belong in ' + HOME + ', not in the pack. Reinstall or undo the edits, then update.', 1);
   const old = String(git('rev-parse', 'HEAD').stdout).trim();
-  const mg = git('merge', '--ff-only', '-q', head);
+  const mg = git('reset', '-q', '--hard', head);
   if (mg.status !== 0) die('Update failed (switch): ' + String(mg.stderr).slice(-300) + ' Kept the current version.', 1);
   // Check again what is now really on disk (catches case-insensitive disks and line-ending changes). Roll back if it does not match.
   const disk = spawnSync(process.execPath, [path.join(PACK, 'tools', 'verify-pack.mjs')], { encoding: 'utf8' });
-  if (disk.status !== 0) { git('reset', '-q', '--hard', old); log('update', 'ROLLED BACK after disk check: ' + disk.stdout.slice(-200)); die('Update ROLLED BACK: the files on disk did not match the signed list after switching. ' + disk.stdout.slice(-200), 1); }
+  if (disk.status !== 0 || !/^PASS /m.test(disk.stdout || '')) { git('reset', '-q', '--hard', old); log('update', 'ROLLED BACK after disk check: ' + disk.stdout.slice(-200)); die('Update ROLLED BACK: the files on disk did not match the signed list after switching. ' + disk.stdout.slice(-200), 1); }
   const after = version(); log('update', `${before} -> ${after}`);
   console.log(before === after ? `Up to date (${after}).` : `Updated ${before} -> ${after}. Read CHANGELOG.md for what changed.`);
   process.exit(0);

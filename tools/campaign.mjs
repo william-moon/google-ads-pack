@@ -298,7 +298,7 @@ async function main() {
   // Google checks the whole build first (validateOnly). Nothing is created by this step.
   try { await adsApi(`customers/${customerId()}/googleAds:mutate`, { mutateOperations: ops, validateOnly: true }); console.log(`\nGOOGLE CHECK: PASS (${ops.length} operations validated, nothing created).`); }
   catch (e) { console.error('\nGOOGLE CHECK FAILED, nothing created: ' + explain(e)); process.exit(1); }
-  if (cmd === 'plan' || !has('confirm')) { console.log(`To build it PAUSED: node pack.mjs campaign create ${A.slice(1).map((a) => (/\s|"/.test(a) ? JSON.stringify(a) : a)).join(' ')} --confirm`); return; }
+  if (cmd === 'plan' || !has('confirm')) { console.log(`To build it PAUSED: node pack.mjs campaign create ${A.slice(1).map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : "'" + String(a).replace(/'/g, "'\\''") + "'")).join(' ')} --confirm`); return; }
   const r = await adsApi(`customers/${customerId()}/googleAds:mutate`, { mutateOperations: ops });
   const campRn = (r.mutateOperationResponses || []).map((x) => x.campaignResult?.resourceName).find(Boolean);
   const campId = campRn?.split('/').pop();

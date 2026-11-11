@@ -168,7 +168,9 @@ async function ga4Property() {
 async function adsLink() {
   const c = config();
   const pid = need(String(arg('property') || c.ga4PropertyId || ''), 'No GA4 property saved yet. Run: node tools/tracking.mjs ga4-property first (or add --property <id>).');
+  if (!/^\d+$/.test(pid)) die('The GA4 property id must be digits only.', 2);
   const cid = need(String(arg('ads') || c.adsCustomerId || '').replace(/-/g, ''), 'No Google Ads account set. Run: node pack.mjs ads accounts, then node pack.mjs set --ads <id> (or add --ads <id>).');
+  if (!/^\d{10}$/.test(cid)) die('The Google Ads id must be 10 digits.', 2);
   const nice = cid.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
   const links = await listAll(`${ADM}/properties/${pid}/googleAdsLinks`, 'googleAdsLinks');
   let link = links.find((l) => String(l.customerId) === cid);
@@ -313,8 +315,8 @@ async function container() {
   const clarityId = /^[a-z0-9]{6,20}$/i.test(c.clarityProjectId || '') ? c.clarityProjectId : '';
 
   const all = (await gtm(`accounts/${acct}/containers`)).container || [];
-  let cont = all.find((x) => cleanDomain(x.name) === domain) || (all.length === 1 ? all[0] : null);
-  if (!cont && all.length > 1) console.log(`This account has ${all.length} containers and none is named ${domain}. A new one will be made.`);
+  let cont = all.find((x) => (arg('container') && (x.containerId === arg('container') || x.publicId === arg('container'))) || cleanDomain(x.name) === domain) || null;
+  if (!cont && all.length) console.log(`No container named ${domain} in this account (found: ${all.map((x) => x.name).join(', ')}). A new one will be made. To use one of those, add --container <GTM-id>.`);
   if (cont && !(cont.usageContext || []).includes('web')) die(`Container "${cont.name}" is not a Web container. Rename it or make a web container named ${domain}.`, 2);
 
   if (!cont) {
@@ -354,7 +356,7 @@ async function container() {
     console.log(`Published container version ${vid}.`);
     log('tracking', `container ${cont.publicId} published v${vid} (${changes} changes)`);
   } else if (!changes) dry('publish the container for the first time.');
-  saveConfig({ domain, gtmContainerId: cid, gtmPublicId: cont.publicId });
+  if (CONFIRM) saveConfig({ domain, gtmContainerId: cid, gtmPublicId: cont.publicId });
   if (!CONFIRM && (changes || !live)) { console.log('Dry run. Add --confirm to do it.'); return; }
   installSnippets(cont.publicId);
   console.log(`\nThen check it: node tools/tracking.mjs verify --url https://${domain}/`);
@@ -405,7 +407,7 @@ function convPlan() {
     list.push({ key: 'booked', name: 'Booked Call', category: 'BOOK_APPOINTMENT', ...b, primary: true });
   }
   for (const it of list) if (it.path === '/' || it.path.length < 2) die(`Refusing "${it.path}" for ${it.name}: it would fire on every page. Use the thank-you page path.`, 2);
-  if (list.length === 2 && (list[0].path.startsWith(list[1].path) || list[1].path.startsWith(list[0].path)) && list[0].host === list[1].host)
+  if (list.length === 2 && (list[0].path.includes(list[1].path) || list[1].path.includes(list[0].path)) && list[0].host === list[1].host)
     die(`The two paths overlap ("${list[0].path}" and "${list[1].path}"), so one page would fire both conversions. Use two different thank-you pages.`, 2);
   return list;
 }
