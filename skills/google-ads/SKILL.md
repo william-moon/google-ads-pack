@@ -31,7 +31,7 @@ report comes from the account itself or a named outside tool.
 
 Changes. Each one is a dry run that Google checks (validateOnly) until you add --confirm:
 
-    node pack.mjs ads negatives --campaign <id> --kw "word,\"a phrase\",[exact words]"
+    node pack.mjs ads negatives --campaign <id> --kw "word,[exact words]"   # broad or [exact] only, never "phrase"
     node pack.mjs ads account-negatives --kw "..."          # account-level list: every Search, Shopping and PMax campaign
     node pack.mjs ads exclude-placements --urls a.com,b.com # whole account
     node pack.mjs ads exclude-ages --campaign <id> --ages 18_24,25_34
@@ -240,7 +240,7 @@ The full setup, every setting and why, is in **skills/google-ads-campaign-setup/
     node pack.mjs campaign template                          # the owner's own copy of the campaign sheet
     node pack.mjs campaign plan --sheet <copy link> --goal booked|optin|sales --type search|pmax --budget <daily $> \
       --geo "<City, State>" [--radius <miles>] --landing <https url> [--audiences "a|b"] [--phone "..."]
-    node pack.mjs campaign plan --keywords "a,b,c" [--broad "one long keyword"] [--headlines "a|b"] [--descriptions "a|b"] \
+    node pack.mjs campaign plan --keywords "a,b,c" [--headlines "a|b"] [--descriptions "a|b"] \
       [--sitelinks "Text|url|desc|desc;;..."] [--callouts "a|b"] [--snippets "a|b"] ...   # same, without a sheet
     node pack.mjs campaign create ...same flags... --confirm
 
@@ -254,8 +254,8 @@ The builder always:
    matching conversion action exists (set up tracking first).
 5. Location: **presence** (people IN the area), never "interested in". The city itself, never the whole country by accident.
 6. Ad schedule: all day unless the owner says otherwise. Ad rotation: optimize.
-7. Keywords: **exact match** buyer keywords plus at most **one broad keyword of 4+ words** per ad group.
-   Informational keywords are refused.
+7. Keywords: **exact match ONLY**. No broad and no phrase keywords, ever. Informational keywords are refused.
+   Negatives are broad (`word`) or exact (`[exact search]`) only, never phrase.
 8. Responsive search ads: 15 headlines (30 characters max) and 4 descriptions (90 characters max) per ad group.
    Write real copy (from the sheet or --headlines/--descriptions); the builder checks lengths, duplicates, "!" in
    headlines, long dashes and ALL CAPS. Never invent facts (awards, years, prices) that the owner did not give you.

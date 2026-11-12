@@ -11,8 +11,9 @@ description: >
 A negative keyword tells Google "do not show my ad for this search". Good negatives stop money leaking
 to people who will never buy. Bad negatives silently kill good traffic. These rules keep both in check.
 
-Match types: `word` = broad (blocks any search with all those words), `"a phrase"` = phrase (blocks
-searches with those words in that order), `[exact words]` = exact (blocks only that search).
+Match types: ONLY two are used. `word` (or `two words`, no quotes) = broad negative (blocks any search with all
+those words, in any order), `[exact words]` = exact negative (blocks only that search). Phrase match negatives
+(`"a phrase"`) are NEVER added; the guard refuses them.
 Negatives do not match close variants, so "job" does not block "jobs".
 
 ## The commands
@@ -44,7 +45,7 @@ Without --confirm every command is a dry run that Google checks.
    owner runs an informational strategy on purpose.
 5. **No job seekers.** jobs, salary, career, hiring, resume, internship.
 6. **No competitor or other-company searches by default.** Names in config.json "competitors" are blocked
-   as a word (or phrase). Without the list, the sweep only blocks clear signs: a web address, LLC or Inc,
+   as a broad negative. Without the list, the sweep only blocks clear signs: a web address, LLC or Inc,
    or "login", "customer service", "phone number" after another name. Searches with the owner's own brand
    words are never touched.
 7. **No off-niche searches.** Products or services the business does not sell. Put known ones in

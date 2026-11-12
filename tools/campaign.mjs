@@ -26,7 +26,7 @@
  *   --plan plan.json            the same plan as a file (shape: node pack.mjs campaign template --json)
  *   --bidding clicks|conversions   Search default: clicks (Maximize Clicks) with a max cost per click of --max-cpc (default $10)
  *   --max-cpc <dollars>         the highest bid per click (default config.maxCpc or 10). Budget should buy 5 to 10 clicks a day.
- *   --broad "a long keyword"    one broad keyword per ad group, 4 or more words (everything else is exact match)
+ *   (exact match only: there is no broad or phrase keyword option; broad keywords in a sheet are skipped)
  *   --sitelinks "Text|https://url|desc 1|desc 2;;Text 2|..."   2 to 4 (text 25, descriptions 35 characters)
  *   --callouts "a|b|c"          up to 10 (25 characters each)
  *   --snippets "a|b|c"          Service catalog values, 3 to 10 (25 characters each)
@@ -36,7 +36,7 @@
  *   --negatives-extra "a,b"     more broad negatives (industry and competitor names)
  *
  * Rules built in: Google Search only (no Display, no search partners). Presence targeting (people IN the area).
- * One conversion goal per campaign. Exact match buyer keywords plus at most one long broad keyword per ad group
+ * One conversion goal per campaign. Exact match buyer keywords ONLY (no broad, no phrase). Negatives are broad or [exact] only
  * (informational keywords are refused). Standard + industry + company negatives attached. Built PAUSED.
  */
 import fs from 'node:fs';
@@ -172,13 +172,6 @@ export function checkAssets({ sitelinks = [], callouts = [], snippets = [], phon
   for (const d of [...dup(callouts), ...dup(snippets), ...dup(sitelinks.map((s) => s.text))]) e.push(`duplicate asset text: "${d}"`);
   return { errors: e, warn: w };
 }
-// One broad keyword per ad group, 4+ words (the long-tail broad hack); everything else exact.
-export function checkBroad(broad) {
-  const e = [], w = [];
-  if (broad.length > 1) e.push(`only 1 broad keyword per ad group (have ${broad.length}: ${broad.join(', ')}). Use exact match for the rest.`);
-  for (const b of broad) if (toks(b).length < 4) e.push(`broad keyword "${b}" is ${toks(b).length} words: a broad keyword must be 4 or more words so it stays bottom of funnel`);
-  return { errors: e, warn: w };
-}
 export function nextMonday(from = new Date()) {
   const d = new Date(Date.UTC(from.getFullYear(), from.getMonth(), from.getDate()));
   const add = (8 - d.getUTCDay()) % 7; d.setUTCDate(d.getUTCDate() + add); return d.toISOString().slice(0, 10);
@@ -229,23 +222,23 @@ async function readInputs() {
   if (!/^https:\/\/[^\s/]+\.[^\s]+/.test(landing)) errors.push('--landing must be a full https:// address of the page where people book, opt in or buy (the local page for this area)');
   if (!arg('geo') && !(arg('lat') && arg('lng'))) errors.push('--geo "<city, state>" (or a ZIP with --radius) needed: never run ads to the whole country by accident');
   const geoLabel = arg('geo', '');
+  if (arg('broad')) errors.push('--broad is gone: keywords are exact match only (use --keywords)');
   // Ad groups: from the sheet/plan, or one group from the flags.
-  const srcGroups = (S.adGroups && S.adGroups.length) ? S.adGroups : [{ name: arg('ad-group', ''), exact: list(arg('keywords')), broad: arg('broad') ? [arg('broad')] : [], headlines: arg('headlines') ? list(arg('headlines'), '|') : null, descriptions: arg('descriptions') ? list(arg('descriptions'), '|') : null }];
+  const srcGroups = (S.adGroups && S.adGroups.length) ? S.adGroups : [{ name: arg('ad-group', ''), exact: list(arg('keywords')), headlines: arg('headlines') ? list(arg('headlines'), '|') : null, descriptions: arg('descriptions') ? list(arg('descriptions'), '|') : null }];
   const adGroups = srcGroups.map((g, i) => {
     const kw = checkKeywords((g.exact || []).map((k) => k.replace(/^[\["]|[\]"]$/g, '')), c);
-    const br = checkKeywords((g.broad || []).map((k) => k.replace(/^[\["]|[\]"]$/g, '')), c);
     const label = g.name || `Ad Group ${i + 1}`;
     if (!kw.ok.length) errors.push(`${label}: exact match keywords needed (buyer keywords only, for example "emergency plumber denver")`);
-    [...kw.refused, ...br.refused].forEach((r) => errors.push(`${label}: keyword refused, informational or not a buyer search: ${r}`)); warn.push(...kw.warn.map((w) => `${label}: ${w}`));
-    const b = checkBroad(br.ok); errors.push(...b.errors.map((e) => `${label}: ${e}`));
+    kw.refused.forEach((r) => errors.push(`${label}: keyword refused, informational or not a buyer search: ${r}`)); warn.push(...kw.warn.map((w) => `${label}: ${w}`));
+    if ((g.broad || []).length) warn.push(`${label}: skipped ${g.broad.length} broad keyword${g.broad.length === 1 ? '' : 's'} (${g.broad.join(', ')}). Keywords are exact match only; put any you want in the Exact Match column.`);
     const draft = draftCopy(c, kw.ok, geoLabel, goal);
     const headlines = g.headlines && g.headlines.length ? g.headlines : draft.headlines;
     const descriptions = g.descriptions && g.descriptions.length ? g.descriptions : draft.descriptions;
     if (headlines.length < 15) warn.push(`${label}: ${headlines.length} headlines. The setup uses all 15 so Google can find the winner.`);
     if (descriptions.length < 4) warn.push(`${label}: ${descriptions.length} descriptions. The setup uses all 4.`);
-    return { name: label, exact: kw.ok, broad: br.ok, headlines, descriptions, drafted: !(g.headlines && g.headlines.length && g.descriptions && g.descriptions.length) };
+    return { name: label, exact: kw.ok, headlines, descriptions, drafted: !(g.headlines && g.headlines.length && g.descriptions && g.descriptions.length) };
   });
-  const keywords = adGroups.flatMap((g) => [...g.exact, ...g.broad]);
+  const keywords = adGroups.flatMap((g) => g.exact);
   const niche = arg('niche', S.niche || (c.services || [])[0] || adGroups[0]?.exact[0] || c.businessName || 'Campaign');
   let start = arg('start', 'monday');
   if (start === 'monday') start = nextMonday(); else if (start === 'today') start = today();
@@ -365,7 +358,7 @@ async function resolveAudiences(names) {
 const PLAN_SHAPE = {
   niche: 'Plumber Denver',
   services: ['Drain cleaning', 'Water heater repair'],
-  adGroups: [{ name: 'Emergency Plumber', exact: ['emergency plumber denver', 'plumber near me'], broad: ['24 hour emergency plumber in denver'], headlines: ['15 headlines, 30 characters each'], descriptions: ['4 descriptions, 90 characters each'] }],
+  adGroups: [{ name: 'Emergency Plumber', exact: ['emergency plumber denver', 'plumber near me'], headlines: ['15 headlines, 30 characters each'], descriptions: ['4 descriptions, 90 characters each'] }],
   negatives: { standard: [], industry: ['course', 'salary'], company: ['competitor name'] },
   sitelinks: [{ text: 'Book a Free Estimate', url: 'https://example.com/denver/', description1: 'Same day service in Denver', description2: 'Licensed, local plumbers' }],
   callouts: ['Licensed & Insured', 'Same Day Service'],
@@ -409,7 +402,6 @@ function buildOps(p, geo, gb) {
       const G = R('adGroups', -3 - i);
       ops.push({ adGroupOperation: { create: { resourceName: G, campaign: C, name: g.name, status: 'ENABLED', type: 'SEARCH_STANDARD', adRotationMode: 'OPTIMIZE' } } });
       for (const k of g.exact) ops.push({ adGroupCriterionOperation: { create: { adGroup: G, status: 'ENABLED', keyword: { text: k, matchType: 'EXACT' } } } });
-      for (const k of g.broad) ops.push({ adGroupCriterionOperation: { create: { adGroup: G, status: 'ENABLED', keyword: { text: k, matchType: 'BROAD' } } } });
       ops.push({ adGroupAdOperation: { create: { adGroup: G, status: 'ENABLED', ad: { finalUrls: [p.landing], responsiveSearchAd: { headlines: g.headlines.map((text) => ({ text })), descriptions: g.descriptions.map((text) => ({ text })) } } } } });
     });
   } else {
@@ -454,7 +446,7 @@ function printPlan(p, errors, warn, live) {
   if (p.type === 'search') {
     L.push(`  Audiences (observation only): ${live?.aud ? (live.aud.map((a) => a.name).join(', ') || 'none found') : (p.audiences.join(', ') || 'none')}`);
     for (const g of p.adGroups) {
-      L.push(`  AD GROUP "${g.name}": ${g.exact.length} exact [${g.exact.join('], [')}]${g.broad.length ? `  +  1 broad: ${g.broad[0]}` : ''}`);
+      L.push(`  AD GROUP "${g.name}": ${g.exact.length} exact [${g.exact.join('], [')}]`);
       L.push(`    Headlines (${g.headlines.length}${g.drafted ? ', DRAFTED from settings, review them' : ''}):`); g.headlines.forEach((h) => L.push(`      [${String(h.length).padStart(2)}] ${h}`));
       L.push(`    Descriptions (${g.descriptions.length}):`); g.descriptions.forEach((d) => L.push(`      [${String(d.length).padStart(2)}] ${d}`));
     }

@@ -1,4 +1,7 @@
 # Changelog
+## 2026.11.14
+- Keywords are EXACT MATCH ONLY. No broad keywords at all: `--broad` is removed, and a Broad Keywords column in the sheet is skipped with a note in the plan.
+- Negatives are BROAD (`word`) or EXACT (`[exact search]`) only. Phrase match negatives are never added: the guard refuses them, the rules use broad instead of phrase, and the AI sweep is told the same.
 ## 2026.11.13
 - New skill: google-ads-campaign-setup. The full campaign setup we teach, for any business and any campaign type.
 - Campaign builder: reads the owner's copy of the campaign sheet (--sheet) or a plan file (--plan); several ad groups; exact match plus one long broad keyword per ad group;

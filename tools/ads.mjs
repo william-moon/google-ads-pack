@@ -16,7 +16,7 @@
  *   pause  --campaign <id> [--confirm]
  *   enable --campaign <id> [--confirm]                        SPEND CHANGE: needs the owner's yes
  *   budget --campaign <id> --daily <dollars> [--confirm]      SPEND CHANGE: needs the owner's yes
- *   negatives --campaign <id> --kw "word,\"a phrase\",[exact words]" [--confirm]    campaign level (Search + PMax)
+ *   negatives --campaign <id> --kw "word,[exact words]" [--confirm]   (broad or exact only, never phrase)    campaign level (Search + PMax)
  *   account-negatives --kw "..." [--confirm]                  account-level list: every Search/Shopping/PMax campaign, now and future
  *   exclude-placements --urls a.com,b.com [--confirm]         account level, every campaign
  *   exclude-ages --campaign <id> --ages 18_24,25_34 [--confirm]
@@ -102,7 +102,7 @@ async function main() {
     const x = await campaignOf(arg('campaign'));
     const { ok } = guardKws(parseKwList(arg('kw')), forCampaign(await targetsOf(x.campaign.id), x.campaign.id));
     if (!ok.length) { console.log('nothing to add'); return; }
-    const ops = ok.map((k) => ({ create: { campaign: `customers/${cid}/campaigns/${x.campaign.id}`, negative: true, keyword: { text: k.replace(/^["\[]|["\]]$/g, '').trim(), matchType: k.startsWith('"') ? 'PHRASE' : k.startsWith('[') ? 'EXACT' : 'BROAD' } } }));
+    const ops = ok.map((k) => ({ create: { campaign: `customers/${cid}/campaigns/${x.campaign.id}`, negative: true, keyword: { text: k.replace(/^["\[]|["\]]$/g, '').trim(), matchType: k.startsWith('[') ? 'EXACT' : 'BROAD' } } }));
     console.log(`negatives on ${x.campaign.name}: ` + ops.map((o) => `${o.create.keyword.text} (${o.create.keyword.matchType})`).join(', '));
     const r = await adsApi(`customers/${cid}/campaignCriteria:mutate`, { operations: ops, partialFailure: true, validateOnly: !confirm });
     confirm ? done(r) : dry();
@@ -142,7 +142,7 @@ async function main() {
 // Account-level negative keyword list (one per account, max 1,000 words). Creates it and attaches it if missing.
 export async function accountNegatives(kws, { confirm = false } = {}) {
   const cid = customerId();
-  const op = (ss, k) => ({ sharedCriterionOperation: { create: { sharedSet: ss, keyword: { text: k.replace(/^["\[]|["\]]$/g, '').trim(), matchType: k.startsWith('"') ? 'PHRASE' : k.startsWith('[') ? 'EXACT' : 'BROAD' } } } });
+  const op = (ss, k) => ({ sharedCriterionOperation: { create: { sharedSet: ss, keyword: { text: k.replace(/^["\[]|["\]]$/g, '').trim(), matchType: k.startsWith('[') ? 'EXACT' : 'BROAD' } } } });
   const key = (o) => o.sharedCriterionOperation.create.keyword.text.toLowerCase() + '|' + o.sharedCriterionOperation.create.keyword.matchType;
   const cur = await search(`SELECT shared_set.resource_name, shared_set.name, shared_set.member_count FROM shared_set WHERE shared_set.type = 'ACCOUNT_LEVEL_NEGATIVE_KEYWORDS' AND shared_set.status = 'ENABLED'`);
   let ops, head;
