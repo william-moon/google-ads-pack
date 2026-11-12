@@ -116,6 +116,11 @@ if (cmd === 'connect') {
   const lines = [], next = [];
   const ok = (good, label, fix) => { lines.push(`${good ? 'OK  ' : 'TODO'} ${label}`); if (!good && fix) next.push(fix); };
   ok(Number(process.versions.node.split('.')[0]) >= 18, `Node ${process.versions.node} (18+ needed)`, 'Install Node 18 or newer.');
+  { // Skills added by an update are not linked yet on older installs (Claude Code links each folder once).
+    const cs = path.join(os.homedir(), '.claude', 'skills');
+    const missing = fs.existsSync(path.join(cs, 'google-ads')) ? fs.readdirSync(path.join(PACK, 'skills')).filter((d) => !fs.existsSync(path.join(cs, d))) : [];
+    ok(!missing.length, `Pack skills linked${missing.length ? ` (missing: ${missing.join(', ')})` : ''}`, 'Link the new skills: INSTALL.md step 2 (run the same link command again).');
+  }
   ok(c.businessName && c.domain, `Business: ${c.businessName || '?'} / ${c.domain || '?'}`, 'Ask the owner for the business name, website, and one line on what they sell, then: node pack.mjs set --name "..." --domain ... --business "..."');
   ok(!!secret('google-client') || !!secret('google')?.client_id, 'Google login key (OAuth client)', 'Owner step 2 in OWNER-GUIDE.md (make the Google login key), then: node pack.mjs connect --client <file>');
   ok(!!g?.refresh_token, 'Google connected (one Allow click)', 'node pack.mjs connect (send the owner the Allow link)');

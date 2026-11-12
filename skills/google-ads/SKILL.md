@@ -235,27 +235,34 @@ Recheck the numbers after 7 and 30 days.
 
 ## 9. Building a campaign (never spends without the owner's yes)
 
-    node pack.mjs campaign plan --goal booked|optin|sales --type search|pmax --budget <daily $> \
-      --geo "<City, State>" [--radius <miles>] --keywords "a,b,c" --landing <https url> [--name "..."] \
-      [--headlines "a|b|c"] [--descriptions "a|b"] [--schedule "MON-FRI 8-18"]
+The full setup, every setting and why, is in **skills/google-ads-campaign-setup/SKILL.md**. Read it first.
+
+    node pack.mjs campaign template                          # the owner's own copy of the campaign sheet
+    node pack.mjs campaign plan --sheet <copy link> --goal booked|optin|sales --type search|pmax --budget <daily $> \
+      --geo "<City, State>" [--radius <miles>] --landing <https url> [--audiences "a|b"] [--phone "..."]
+    node pack.mjs campaign plan --keywords "a,b,c" [--broad "one long keyword"] [--headlines "a|b"] [--descriptions "a|b"] \
+      [--sitelinks "Text|url|desc|desc;;..."] [--callouts "a|b"] [--snippets "a|b"] ...   # same, without a sheet
     node pack.mjs campaign create ...same flags... --confirm
 
 The builder always:
-1. Builds the campaign **PAUSED**. Turning it on is `ads enable --campaign <id> --confirm`, after the owner's yes.
+1. Builds the campaign **PAUSED**, starting the next **Monday**. Turning it on is `ads enable --campaign <id> --confirm`, after the owner's yes.
 2. Search campaigns: **Google Search only**. No Display network, no search partners.
-3. Bidding: **Maximize Conversions** while the goal has under 30 conversions a month. After that,
-   **Target CPA** near the real 30-day average.
-4. Conversion goal: the **primary action** for the goal ("Booked Call" when it exists). It refuses to
-   build when no matching conversion action exists (set up tracking first).
-5. Location: **presence** (people IN the area), never "interested in". Never the whole country by accident.
-6. Ad schedule: all hours unless the owner says otherwise.
-7. Keywords: **phrase + exact** on bottom-of-funnel buyer keywords only. Informational keywords are refused.
-8. Responsive search ad: up to 15 headlines (30 characters max) and 4 descriptions (90 characters max).
-   Draft them from config.json (business, services, area). Write real copy and pass it with --headlines and
-   --descriptions; the builder checks lengths, duplicates, "!" in headlines and ALL CAPS. Never invent facts
-   (awards, years, prices) that the owner did not give you.
-9. **Standard negatives** attached at creation (skipping any that would block the new keywords).
-10. Google checks the whole build first (validateOnly). If Google rejects a field, the error is printed
+3. Bidding: Search starts on **Maximize Clicks with a max cost per click** (--max-cpc, default $10). The budget
+   should buy 5 to 10 clicks a day (cost per click x 5). After 30+ goal conversions a month, the plan says so:
+   ask the owner before switching to Maximize Conversions. PMax uses Maximize Conversions.
+4. Conversion goal: ONE action for the goal ("Booked Call" when it exists). It refuses to build when no
+   matching conversion action exists (set up tracking first).
+5. Location: **presence** (people IN the area), never "interested in". The city itself, never the whole country by accident.
+6. Ad schedule: all day unless the owner says otherwise. Ad rotation: optimize.
+7. Keywords: **exact match** buyer keywords plus at most **one broad keyword of 4+ words** per ad group.
+   Informational keywords are refused.
+8. Responsive search ads: 15 headlines (30 characters max) and 4 descriptions (90 characters max) per ad group.
+   Write real copy (from the sheet or --headlines/--descriptions); the builder checks lengths, duplicates, "!" in
+   headlines, long dashes and ALL CAPS. Never invent facts (awards, years, prices) that the owner did not give you.
+9. Assets: 2 to 4 sitelinks, about 10 callouts, a "Service catalog" structured snippet and the phone number.
+10. Audiences on **observation only** (--audiences), so they track data and never narrow the ad.
+11. **Standard, industry and company negatives** attached at creation (skipping any that would block the new keywords).
+12. Google checks the whole build first (validateOnly). If Google rejects a field, the error is printed
     and nothing is created.
 
 Performance Max also needs: 3 to 15 headlines, 1 to 5 long headlines (90 characters), 2 to 5 descriptions

@@ -6,7 +6,10 @@ A skill pack that lets a business owner's AI bot (Claude Code, or a bot on a VPS
 3. Sets up conversions the right way: Opt In (secondary) and Booked Call (primary), firing only on thank-you pages, then proves it.
 4. Saves Microsoft Clarity data every day to a Google Sheet in the owner's Drive plus a local file (Clarity only keeps 3 days).
 5. Adds standard negative keywords on day one, then sweeps search terms every day and blocks the ones that waste money, without ever blocking what the owner targets.
-6. Plans and builds campaigns (always paused until the owner says yes) and writes a weekly Keep / Fix / Stop report.
+6. Builds campaigns the way we teach (skills/google-ads-campaign-setup), from the owner's copy of the campaign sheet: exact match keywords, Maximize Clicks with a max cost per click, Google Search only, presence targeting, 15 headlines, 4 descriptions, sitelinks, callouts, a service catalog, a call button, observation audiences and negatives. Always paused until the owner says yes.
+7. Writes a weekly Keep / Fix / Stop report.
+
+Campaign sheet (make a copy, never edit the master): https://docs.google.com/spreadsheets/d/1GaV9Yc1wSWyqHQe2Zr-JWtwPT4Rg2ttokxIlgAs9XWM/copy
 
 The owner only makes decisions. Start here:
 - Bot: read INSTALL.md.

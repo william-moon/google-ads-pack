@@ -11,7 +11,8 @@ Every command runs from the pack folder: `node pack.mjs <command>`. Settings and
 ## Start of every Google Ads task
 1. Run `node pack.mjs doctor`. If it shows a TODO, do the NEXT step it prints before anything else.
 2. Pick every skill this task touches:
-   - `google-ads`: analysis, reports, campaign builder, any change to the ad account.
+   - `google-ads`: analysis, reports, any change to the ad account.
+   - `google-ads-campaign-setup`: every new campaign (any type), the campaign sheet, ad copy and assets.
    - `negative-keywords`: standard list, daily sweep, conflicts.
    - `google-setup`: GA4, GTM, Clarity, conversions, thank-you pages.
    - `landing-page-design` (with Anthropic's `frontend-design`): any page ad traffic lands on.

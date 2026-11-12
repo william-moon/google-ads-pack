@@ -18,9 +18,26 @@
  *   --schedule "MON-FRI 8-18"   ad schedule (default: all hours)
  *   --country US --language 1000 (English)   --no-goal (allow a build with no matching conversion action: not advised)
  *
- * Rules built in: Search network only (no Display, no search partners). Presence targeting (people IN the area).
- * Maximize Conversions while the goal has under 30 conversions a month, then Target CPA near the real average.
- * Phrase + exact match on buyer keywords only (informational keywords are refused). Standard negatives attached.
+ *
+ * The campaign setup we teach (skills/google-ads-campaign-setup/SKILL.md), built in:
+ *   --sheet <link>              read YOUR copy of the Google Ad Template (keywords, ad groups, 15 headlines, 4 descriptions,
+ *                               sitelinks, callouts, phone, structured snippets, standard/industry/company negatives).
+ *                               Make the copy first: node pack.mjs campaign template
+ *   --plan plan.json            the same plan as a file (shape: node pack.mjs campaign template --json)
+ *   --bidding clicks|conversions   Search default: clicks (Maximize Clicks) with a max cost per click of --max-cpc (default $10)
+ *   --max-cpc <dollars>         the highest bid per click (default config.maxCpc or 10). Budget should buy 5 to 10 clicks a day.
+ *   --broad "a long keyword"    one broad keyword per ad group, 4 or more words (everything else is exact match)
+ *   --sitelinks "Text|https://url|desc 1|desc 2;;Text 2|..."   2 to 4 (text 25, descriptions 35 characters)
+ *   --callouts "a|b|c"          up to 10 (25 characters each)
+ *   --snippets "a|b|c"          Service catalog values, 3 to 10 (25 characters each)
+ *   --phone "+1 555 555 5555"   call asset so people can call from the ad
+ *   --audiences "name|name"     in-market / interest audiences on OBSERVATION only (tracks data, never narrows the ad)
+ *   --start monday|today|YYYY-MM-DD   default: the next Monday   --end YYYY-MM-DD (only when the budget has a hard stop)
+ *   --negatives-extra "a,b"     more broad negatives (industry and competitor names)
+ *
+ * Rules built in: Google Search only (no Display, no search partners). Presence targeting (people IN the area).
+ * One conversion goal per campaign. Exact match buyer keywords plus at most one long broad keyword per ad group
+ * (informational keywords are refused). Standard + industry + company negatives attached. Built PAUSED.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,6 +46,7 @@ import { PACK, DATA, argv, arg, has, config, secret, readJSON, writeJSON, log, t
 import { adsApi, search, customerId, dateRange } from '../lib/ads.mjs';
 import { classifyTerm, guardNegative, norm, toks } from '../lib/classify.mjs';
 import { explain } from './ads.mjs';
+import { parseCsv, planFromTabs, sheetId, tabCsvUrl, TABS, TEMPLATE_COPY_URL } from '../lib/plan-sheet.mjs';
 
 const A = argv[0] === 'campaign' ? argv.slice(1) : argv;
 const cmd = A[0];
@@ -121,34 +139,141 @@ export function checkImage(file, field) {
   return null;
 }
 
+// Policy-style text checks shared by every asset (no long dashes, no ALL CAPS words, no repeated punctuation).
+function textRules(t, what) {
+  const e = [];
+  if (/[\u2013\u2014]/.test(t)) e.push(`${what}: no long dashes: "${t}"`);
+  if (/\b[A-Z]{5,}\b/.test(t)) e.push(`${what}: no ALL CAPS words: "${t}"`);
+  if (/!!|\?\?|\s{2,}/.test(t)) e.push(`${what}: repeated punctuation or double space: "${t}"`);
+  return e;
+}
+export function checkAssets({ sitelinks = [], callouts = [], snippets = [], phone = '' }, landing = '') {
+  const e = [], w = [];
+  if (sitelinks.length && sitelinks.length < 2) e.push('sitelinks: Google shows them only with 2 or more');
+  if (sitelinks.length > 4) w.push(`sitelinks: ${sitelinks.length} given, the setup uses 2 to 4 (extra ones are kept)`);
+  if (!sitelinks.length) w.push('no sitelinks: the setup adds 2 to 4 (--sitelinks or the sheet). The ad will be smaller.');
+  for (const s of sitelinks) {
+    if (!s.text || s.text.length > 25) e.push(`sitelink text must be 1 to 25 characters: "${s.text}"`);
+    if (!/^https:\/\//.test(s.url || landing)) e.push(`sitelink "${s.text}" needs an https:// address`);
+    if (!s.description1 || !s.description2) e.push(`sitelink "${s.text}" needs 2 descriptions (35 characters each)`);
+    for (const d of [s.description1, s.description2]) if (d && d.length > 35) e.push(`sitelink description over 35 characters (${d.length}): "${d}"`);
+    for (const t of [s.text, s.description1, s.description2]) if (t) e.push(...textRules(t, 'sitelink'));
+  }
+  if (!callouts.length) w.push('no callouts: the setup adds about 10 (--callouts or the sheet)');
+  if (callouts.length > 20) e.push(`at most 20 callouts, have ${callouts.length}`);
+  for (const t of callouts) { if (t.length > 25) e.push(`callout over 25 characters (${t.length}): "${t}"`); e.push(...textRules(t, 'callout')); }
+  if (snippets.length && snippets.length < 3) e.push('structured snippets need at least 3 values');
+  if (!snippets.length) w.push('no structured snippets: the setup lists the services as a "Service catalog"');
+  if (snippets.length > 10) e.push(`at most 10 structured snippet values, have ${snippets.length}`);
+  for (const t of snippets) { if (t.length > 25) e.push(`snippet value over 25 characters (${t.length}): "${t}"`); e.push(...textRules(t, 'snippet')); }
+  if (phone && !/^\+?[\d\s().-]{7,20}$/.test(phone)) e.push(`phone does not look like a phone number: "${phone}"`);
+  if (!phone) w.push('no phone number: the setup adds a call asset so people can call from the ad (--phone)');
+  const dup = (a) => a.filter((x, i) => a.findIndex((y) => y.toLowerCase() === x.toLowerCase()) !== i);
+  for (const d of [...dup(callouts), ...dup(snippets), ...dup(sitelinks.map((s) => s.text))]) e.push(`duplicate asset text: "${d}"`);
+  return { errors: e, warn: w };
+}
+// One broad keyword per ad group, 4+ words (the long-tail broad hack); everything else exact.
+export function checkBroad(broad) {
+  const e = [], w = [];
+  if (broad.length > 1) e.push(`only 1 broad keyword per ad group (have ${broad.length}: ${broad.join(', ')}). Use exact match for the rest.`);
+  for (const b of broad) if (toks(b).length < 4) e.push(`broad keyword "${b}" is ${toks(b).length} words: a broad keyword must be 4 or more words so it stays bottom of funnel`);
+  return { errors: e, warn: w };
+}
+export function nextMonday(from = new Date()) {
+  const d = new Date(Date.UTC(from.getFullYear(), from.getMonth(), from.getDate()));
+  const add = (8 - d.getUTCDay()) % 7; d.setUTCDate(d.getUTCDate() + add); return d.toISOString().slice(0, 10);
+}
+export function campaignName(niche, startIso) {
+  const d = new Date(startIso + 'T12:00:00Z');
+  return `${titleCase(niche || 'Campaign')} ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).replace(',', '')}`;
+}
+export function parseSitelinks(s) {
+  return list(s, ';;').map((x) => { const [text, url, description1, description2] = x.split('|').map((y) => (y || '').trim()); return { text, url, description1, description2 }; });
+}
+
+// Read the owner's copy of the template: public link first, then the bot's own signed-in Chrome for a private copy.
+async function fetchTab(id, tab) {
+  const url = tabCsvUrl(id, tab);
+  const looksCsv = (t) => t && !/^\s*</.test(t) && /,/.test(t);
+  try { const r = await fetch(url, { redirect: 'follow' }); const t = await r.text(); if (r.ok && looksCsv(t)) return t; } catch {}
+  const { withPage } = await import('../lib/browser.mjs');
+  const t = await withPage(async (page) => { await page.goto(`https://docs.google.com/spreadsheets/d/${id}/edit`, { waitUntil: 'domcontentloaded' }); const r = await page.request.get(url); return r.ok() ? r.text() : ''; });
+  if (!looksCsv(t)) throw new Error(`could not read the "${tab}" tab. Share your copy with the Google account signed in to the bot's browser (node pack.mjs browser login), or make it "anyone with the link can view".`);
+  return t;
+}
+async function loadPlan() {
+  if (arg('plan')) { const j = readJSON(arg('plan')); if (!j) throw new Error('--plan file is missing or not valid JSON'); return j; }
+  if (!arg('sheet')) return null;
+  const id = sheetId(arg('sheet'));
+  if (id === sheetId(TEMPLATE_COPY_URL)) throw new Error(`that is the master template. Make your own copy first: ${TEMPLATE_COPY_URL}`);
+  return planFromTabs(parseCsv(await fetchTab(id, arg('kw-tab', TABS.keywords))), parseCsv(await fetchTab(id, arg('ads-tab', TABS.ads))));
+}
+
 // ---------- build the plan ----------
-function readInputs() {
+async function readInputs() {
   const c = config();
-  const goal = arg('goal'), type = arg('type', 'search'), budget = Number(arg('budget')), landing = arg('landing', '');
-  const errors = [], warn = [];
+  let sheet = null; const errors = [], warn = [];
+  try { sheet = await loadPlan(); } catch (e) { errors.push('plan: ' + e.message); }
+  const S = sheet || {};
+  const goal = arg('goal'), type = arg('type', 'search'), landing = arg('landing', '');
+  const maxCpc = Number(arg('max-cpc', c.maxCpc || 10));
+  const bidding = arg('bidding', type === 'search' ? 'clicks' : 'conversions');
+  const budget = Number(arg('budget', ''));
   if (!GOALS[goal]) errors.push('--goal must be booked, optin or sales');
   if (!['search', 'pmax'].includes(type)) errors.push('--type must be search or pmax');
-  if (!(budget > 0)) errors.push('--budget <daily dollars> needed');
-  else if (budget < 5) warn.push(`$${budget}/day is very low: the campaign may get almost no clicks`);
-  if (!/^https:\/\/[^\s/]+\.[^\s]+/.test(landing)) errors.push('--landing must be a full https:// address of the page where people book, opt in or buy');
+  if (!['clicks', 'conversions'].includes(bidding)) errors.push('--bidding must be clicks or conversions');
+  if (type === 'pmax' && bidding === 'clicks') errors.push('Performance Max cannot bid for clicks: use --bidding conversions (the default for PMax)');
+  if (!(maxCpc > 0 && maxCpc <= 1000)) errors.push('--max-cpc must be a dollar amount, for example 10');
+  if (!(budget > 0)) errors.push(`--budget <daily dollars> needed. The rule: average cost per click x 5 clicks a day (at a $${maxCpc} max click: $${maxCpc * 5}/day)`);
+  else if (budget < maxCpc * 5) warn.push(`$${budget}/day buys fewer than 5 clicks a day at up to $${maxCpc} a click. The setup wants 5 to 10 clicks a day ($${maxCpc * 5} to $${maxCpc * 10}/day), or lower keyword costs.`);
+  if (!/^https:\/\/[^\s/]+\.[^\s]+/.test(landing)) errors.push('--landing must be a full https:// address of the page where people book, opt in or buy (the local page for this area)');
   if (!arg('geo') && !(arg('lat') && arg('lng'))) errors.push('--geo "<city, state>" (or a ZIP with --radius) needed: never run ads to the whole country by accident');
-  const kw = checkKeywords(list(arg('keywords')), c);
-  if (!kw.ok.length) errors.push('--keywords needed: buyer keywords only (for example "emergency plumber denver")');
-  kw.refused.forEach((r) => errors.push('keyword refused, informational or not a buyer search: ' + r)); warn.push(...kw.warn);
-  const name = arg('name') || `${c.businessName || 'Campaign'} | ${type === 'pmax' ? 'PMax' : 'Search'} | ${goal || ''} | ${today()}`;
   const geoLabel = arg('geo', '');
-  const draft = draftCopy(c, kw.ok, geoLabel, goal);
-  const headlines = arg('headlines') ? list(arg('headlines'), '|') : draft.headlines;
-  const descriptions = arg('descriptions') ? list(arg('descriptions'), '|') : draft.descriptions;
-  const drafted = !arg('headlines') || !arg('descriptions');
+  // Ad groups: from the sheet/plan, or one group from the flags.
+  const srcGroups = (S.adGroups && S.adGroups.length) ? S.adGroups : [{ name: arg('ad-group', ''), exact: list(arg('keywords')), broad: arg('broad') ? [arg('broad')] : [], headlines: arg('headlines') ? list(arg('headlines'), '|') : null, descriptions: arg('descriptions') ? list(arg('descriptions'), '|') : null }];
+  const adGroups = srcGroups.map((g, i) => {
+    const kw = checkKeywords((g.exact || []).map((k) => k.replace(/^[\["]|[\]"]$/g, '')), c);
+    const br = checkKeywords((g.broad || []).map((k) => k.replace(/^[\["]|[\]"]$/g, '')), c);
+    const label = g.name || `Ad Group ${i + 1}`;
+    if (!kw.ok.length) errors.push(`${label}: exact match keywords needed (buyer keywords only, for example "emergency plumber denver")`);
+    [...kw.refused, ...br.refused].forEach((r) => errors.push(`${label}: keyword refused, informational or not a buyer search: ${r}`)); warn.push(...kw.warn.map((w) => `${label}: ${w}`));
+    const b = checkBroad(br.ok); errors.push(...b.errors.map((e) => `${label}: ${e}`));
+    const draft = draftCopy(c, kw.ok, geoLabel, goal);
+    const headlines = g.headlines && g.headlines.length ? g.headlines : draft.headlines;
+    const descriptions = g.descriptions && g.descriptions.length ? g.descriptions : draft.descriptions;
+    if (headlines.length < 15) warn.push(`${label}: ${headlines.length} headlines. The setup uses all 15 so Google can find the winner.`);
+    if (descriptions.length < 4) warn.push(`${label}: ${descriptions.length} descriptions. The setup uses all 4.`);
+    return { name: label, exact: kw.ok, broad: br.ok, headlines, descriptions, drafted: !(g.headlines && g.headlines.length && g.descriptions && g.descriptions.length) };
+  });
+  const keywords = adGroups.flatMap((g) => [...g.exact, ...g.broad]);
+  const niche = arg('niche', S.niche || (c.services || [])[0] || adGroups[0]?.exact[0] || c.businessName || 'Campaign');
+  let start = arg('start', 'monday');
+  if (start === 'monday') start = nextMonday(); else if (start === 'today') start = today();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) errors.push('--start must be monday, today or YYYY-MM-DD');
+  else if (start < today()) errors.push('--start is in the past');
+  const end = arg('end', '');
+  if (end && (!/^\d{4}-\d{2}-\d{2}$/.test(end) || end <= start)) errors.push('--end must be YYYY-MM-DD after the start date');
+  const name = arg('name') || campaignName(niche, start);
   let schedule = []; try { schedule = parseSchedule(arg('schedule')); } catch (e) { errors.push(e.message); }
-  const p = { name, goal, type, budget, landing, geoLabel, radius: arg('radius') ? Number(arg('radius')) : null, keywords: kw.ok, headlines, descriptions, drafted, schedule,
-    country: arg('country', 'US'), language: arg('language', '1000') };
-  if (type === 'search') errors.push(...checkRsa(headlines, descriptions));
+  const assets = {
+    sitelinks: (arg('sitelinks') ? parseSitelinks(arg('sitelinks')) : (S.sitelinks || [])).map((s) => ({ ...s, url: /^https:\/\//.test(s.url || '') ? s.url : landing })),
+    callouts: arg('callouts') ? list(arg('callouts'), '|') : (S.callouts || []),
+    snippetHeader: 'Service catalog',
+    snippets: arg('snippets') ? list(arg('snippets'), '|') : (S.snippets && S.snippets.length ? S.snippets : (S.services || c.services || []).filter((s) => s.length <= 25).slice(0, 10)),
+    phone: arg('phone', S.phone || c.phone || ''),
+  };
+  const ac = checkAssets(assets, landing); errors.push(...ac.errors); warn.push(...ac.warn);
+  const audiences = list(arg('audiences', (c.audiences || []).join('|')), '|');
+  if (type === 'search' && !audiences.length) warn.push('no observation audiences: add 2 to 5 in-market or interest topics for this industry with --audiences "a|b" (data only, never narrows who sees the ad)');
+  const headlines = adGroups[0]?.headlines || [], descriptions = adGroups[0]?.descriptions || [];
+  const p = { name, niche, goal, type, budget, maxCpc, bidding, landing, geoLabel, radius: arg('radius') ? Number(arg('radius')) : null, adGroups, keywords, headlines, descriptions,
+    drafted: adGroups.some((g) => g.drafted), schedule, start, end, assets, audiences, extraNegatives: [...(S.negatives?.industry || []), ...(S.negatives?.company || []), ...list(arg('negatives-extra')).map((w) => w.toLowerCase())],
+    sheetStandard: S.negatives?.standard || [], country: arg('country', 'US'), language: arg('language', '1000') };
+  if (type === 'search') for (const g of adGroups) errors.push(...checkRsa(g.headlines, g.descriptions).map((e) => `${g.name}: ${e}`));
   else {
     p.longHeadlines = arg('long-headlines') ? list(arg('long-headlines'), '|') : [descriptions[0]].filter((d) => d && d.length <= 90);
     p.businessName = arg('business-name', c.businessName || '');
-    p.themes = arg('themes') ? list(arg('themes')).map(norm) : kw.ok.slice(0, 25);
+    p.themes = arg('themes') ? list(arg('themes')).map(norm) : keywords.slice(0, 25);
     p.images = { LOGO: list(arg('logo')), MARKETING_IMAGE: list(arg('landscape')), SQUARE_MARKETING_IMAGE: list(arg('square')), PORTRAIT_MARKETING_IMAGE: list(arg('portrait')) };
     errors.push(...checkRsa(headlines, descriptions, { minH: 3, maxH: 15, minD: 2, maxD: 5 }));
     if (!descriptions.some((d) => d.length <= 60)) errors.push('PMax needs at least one description of 60 characters or less');
@@ -168,12 +293,19 @@ function readInputs() {
   return { p, errors, warn, c };
 }
 function standardFor(p, c) {
-  const std = (readJSON(path.join(PACK, 'data', 'standard-negatives.json'), {}).standard || []).map((w) => w.toLowerCase());
+  const pack = (readJSON(path.join(PACK, 'data', 'standard-negatives.json'), {}).standard || []).map((w) => w.toLowerCase());
+  // Standard list (pack + the sheet's own), then the sheet's industry and company lists and --negatives-extra. All broad match.
+  const all = [...new Set([...pack, ...(p.sheetStandard || []), ...(p.extraNegatives || [])].map((w) => norm(w)).filter(Boolean))];
   const skip = new Set((c.standardSkip || []).map((w) => w.toLowerCase()));
   const ctx = { targets: [...p.keywords, ...(p.themes || []), ...(c.targets || [])], protect: c.protect || [] };
   const ok = [], skipped = [];
-  for (const w of std) { if (skip.has(w)) continue; const why = guardNegative([w, 'BROAD'], ctx); if (why) skipped.push(`${w} (${why})`); else ok.push(w); }
-  return { ok, skipped };
+  for (const w of all) {
+    if (skip.has(w)) continue;
+    if (w.length > 80 || toks(w).length > 10) { skipped.push(`${w} (too long for a keyword)`); continue; }
+    const why = guardNegative([w, 'BROAD'], ctx); if (why) skipped.push(`${w} (${why})`); else ok.push(w);
+  }
+  if (ok.length > 2000) skipped.push(`${ok.splice(2000).length} more (cap of 2000 negatives per campaign at creation)`);
+  return { ok, skipped, fromSheet: (p.sheetStandard || []).length + (p.extraNegatives || []).length };
 }
 
 // ---------- live lookups (only when connected) ----------
@@ -191,7 +323,10 @@ async function resolveGeo(p) {
   const j = await adsApi('geoTargetConstants:suggest', { locale: 'en', countryCode: p.country, locationNames: { names } });
   const sugg = j.geoTargetConstantSuggestions || [];
   for (const n of names) {
-    const s = sugg.find((x) => (x.searchTerm || '').toLowerCase() === n.toLowerCase()) || sugg.find((x) => x.geoTargetConstant?.canonicalName?.toLowerCase().includes(n.split(',')[0].trim().toLowerCase()));
+    // Prefer the real city (the setup targets the city itself), then any exact match, then a name match.
+    const city = n.split(',')[0].trim().toLowerCase(), mine = sugg.filter((x) => (x.searchTerm || '').toLowerCase() === n.toLowerCase());
+    const s = mine.find((x) => x.geoTargetConstant?.targetType === 'City' && x.geoTargetConstant.name?.toLowerCase() === city) || sugg.find((x) => x.geoTargetConstant?.targetType === 'City' && x.geoTargetConstant.name?.toLowerCase() === city)
+      || mine[0] || sugg.find((x) => x.geoTargetConstant?.canonicalName?.toLowerCase().includes(city));
     if (!s) throw new Error(`could not find the place "${n}". Try "City, State, Country" or a ZIP with --radius`);
     out.push({ label: `${s.geoTargetConstant.canonicalName} (${s.geoTargetConstant.targetType})`, criterion: { location: { geoTargetConstant: s.geoTargetConstant.resourceName } } });
   }
@@ -209,31 +344,74 @@ async function goalAndBidding(p) {
     for (const x of await search(`SELECT metrics.cost_micros FROM customer WHERE ${dateRange(30)}`)) cost += Number(x.metrics.costMicros || 0) / 1e6;
   }
   out.conv30 = conv; out.cost30 = cost;
+  if (p.bidding === 'clicks') { out.bidding = biddingFor(p); out.biddingLabel = `Maximize Clicks, max $${p.maxCpc} a click (the setup for a new campaign; the goal "${hit?.conversionAction.name || p.goal}" is still tracked)${conv >= 30 ? `. This account already has ${conv.toFixed(0)} goal conversions in 30 days: Maximize Conversions may now do better, ask the owner` : ''}`; return out; }
   out.bidding = conv >= 30 ? { maximizeConversions: { targetCpaMicros: String(Math.round((cost / conv) * 1e6)) } } : { maximizeConversions: {} };
   out.biddingLabel = conv >= 30 ? `Target CPA $${(cost / conv).toFixed(2)} (the real 30-day average: ${conv.toFixed(0)} conversions)` : `Maximize Conversions (only ${conv.toFixed(0)} goal conversions in 30 days; switch to Target CPA after 30+ a month)`;
   return out;
 }
 
+// In-market and interest topics, matched by name (each asked name -> the best match). Observation only.
+async function resolveAudiences(names) {
+  const rows = await search(`SELECT user_interest.resource_name, user_interest.name, user_interest.taxonomy_type, user_interest.availabilities FROM user_interest WHERE user_interest.taxonomy_type IN ('IN_MARKET', 'AFFINITY')`);
+  const out = [];
+  for (const asked of names.slice(0, 10)) {
+    const n = norm(asked), cand = rows.map((r) => r.userInterest).filter((u) => u?.name);
+    const hit = cand.find((u) => norm(u.name) === n) || cand.find((u) => u.taxonomyType === 'IN_MARKET' && norm(u.name).includes(n)) || cand.find((u) => norm(u.name).includes(n));
+    if (hit && !out.some((o) => o.resourceName === hit.resourceName)) out.push({ asked, name: `${hit.name} (${hit.taxonomyType === 'IN_MARKET' ? 'in-market' : 'interest'})`, resourceName: hit.resourceName });
+  }
+  return out;
+}
+// The --plan file shape (what the sheet becomes). Text is checked exactly like the sheet.
+const PLAN_SHAPE = {
+  niche: 'Plumber Denver',
+  services: ['Drain cleaning', 'Water heater repair'],
+  adGroups: [{ name: 'Emergency Plumber', exact: ['emergency plumber denver', 'plumber near me'], broad: ['24 hour emergency plumber in denver'], headlines: ['15 headlines, 30 characters each'], descriptions: ['4 descriptions, 90 characters each'] }],
+  negatives: { standard: [], industry: ['course', 'salary'], company: ['competitor name'] },
+  sitelinks: [{ text: 'Book a Free Estimate', url: 'https://example.com/denver/', description1: 'Same day service in Denver', description2: 'Licensed, local plumbers' }],
+  callouts: ['Licensed & Insured', 'Same Day Service'],
+  phone: '+1 303 555 0100',
+  snippets: ['Drain Cleaning', 'Water Heater Repair', 'Leak Detection'],
+};
+
 // ---------- the API operations ----------
+export function biddingFor(p) {
+  if (p.bidding === 'clicks') return { targetSpend: { cpcBidCeilingMicros: String(Math.round(p.maxCpc * 1e6)) } };
+  return { maximizeConversions: {} };
+}
 function buildOps(p, geo, gb) {
   const cid = customerId(), R = (k, id) => `customers/${cid}/${k}/${id}`;
-  const B = R('campaignBudgets', -1), C = R('campaigns', -2), G = R('adGroups', -3), AG = R('assetGroups', -4);
+  const B = R('campaignBudgets', -1), C = R('campaigns', -2), AG = R('assetGroups', -4);
   const ops = [];
   ops.push({ campaignBudgetOperation: { create: { resourceName: B, name: `${p.name} budget ${Date.now()}`, amountMicros: String(Math.round(p.budget * 1e6)), deliveryMethod: 'STANDARD', explicitlyShared: false } } });
-  const camp = { resourceName: C, name: p.name, status: 'PAUSED', campaignBudget: B, ...(gb?.bidding || { maximizeConversions: {} }),
+  const camp = { resourceName: C, name: p.name, status: 'PAUSED', campaignBudget: B, ...(gb?.bidding || biddingFor(p)),
     geoTargetTypeSetting: { positiveGeoTargetType: 'PRESENCE', negativeGeoTargetType: 'PRESENCE' },
+    startDateTime: `${p.start} 00:00:00`, ...(p.end ? { endDateTime: `${p.end} 23:59:59` } : {}),
     containsEuPoliticalAdvertising: 'DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING' };
-  if (p.type === 'search') Object.assign(camp, { advertisingChannelType: 'SEARCH', networkSettings: { targetGoogleSearch: true, targetSearchNetwork: false, targetContentNetwork: false, targetPartnerSearchNetwork: false } });
+  if (p.type === 'search') Object.assign(camp, { advertisingChannelType: 'SEARCH', networkSettings: { targetGoogleSearch: true, targetSearchNetwork: false, targetContentNetwork: false, targetPartnerSearchNetwork: false },
+    ...(p.audiencesResolved?.length ? { targetingSetting: { targetRestrictions: [{ targetingDimension: 'AUDIENCE', bidOnly: true }] } } : {}) });
   else Object.assign(camp, { advertisingChannelType: 'PERFORMANCE_MAX', brandGuidelinesEnabled: false });
   ops.push({ campaignOperation: { create: camp } });
   for (const g of geo) ops.push({ campaignCriterionOperation: { create: { campaign: C, ...g.criterion } } });
   ops.push({ campaignCriterionOperation: { create: { campaign: C, language: { languageConstant: `languageConstants/${p.language}` } } } });
   for (const s of p.schedule) ops.push({ campaignCriterionOperation: { create: { campaign: C, adSchedule: s } } });
   for (const w of p.negatives.ok) ops.push({ campaignCriterionOperation: { create: { campaign: C, negative: true, keyword: { text: w, matchType: 'BROAD' } } } });
+  // Observation audiences: bidOnly above means they only collect data, they never narrow who sees the ad.
+  if (p.type === 'search') for (const a of p.audiencesResolved || []) ops.push({ campaignCriterionOperation: { create: { campaign: C, userInterest: { userInterestCategory: a.resourceName } } } });
+  // Campaign assets (sitelinks, callouts, structured snippet, call) make the ad bigger. Search and PMax both use them.
+  let an = -1000;
+  const asset = (body, fieldType) => { const r = R('assets', an--); ops.push({ assetOperation: { create: { resourceName: r, ...body } } }); ops.push({ campaignAssetOperation: { create: { campaign: C, asset: r, fieldType } } }); };
+  for (const s of p.assets.sitelinks) asset({ finalUrls: [s.url || p.landing], sitelinkAsset: { linkText: s.text, description1: s.description1, description2: s.description2 } }, 'SITELINK');
+  for (const t of p.assets.callouts) asset({ calloutAsset: { calloutText: t } }, 'CALLOUT');
+  if (p.assets.snippets.length >= 3) asset({ structuredSnippetAsset: { header: p.assets.snippetHeader, values: p.assets.snippets } }, 'STRUCTURED_SNIPPET');
+  if (p.assets.phone) asset({ callAsset: { countryCode: p.country, phoneNumber: p.assets.phone } }, 'CALL');
   if (p.type === 'search') {
-    ops.push({ adGroupOperation: { create: { resourceName: G, campaign: C, name: `${p.name} | ad group`, status: 'ENABLED', type: 'SEARCH_STANDARD' } } });
-    for (const k of p.keywords) for (const matchType of ['PHRASE', 'EXACT']) ops.push({ adGroupCriterionOperation: { create: { adGroup: G, status: 'ENABLED', keyword: { text: k, matchType } } } });
-    ops.push({ adGroupAdOperation: { create: { adGroup: G, status: 'ENABLED', ad: { finalUrls: [p.landing], responsiveSearchAd: { headlines: p.headlines.map((text) => ({ text })), descriptions: p.descriptions.map((text) => ({ text })) } } } } });
+    p.adGroups.forEach((g, i) => {
+      const G = R('adGroups', -3 - i);
+      ops.push({ adGroupOperation: { create: { resourceName: G, campaign: C, name: g.name, status: 'ENABLED', type: 'SEARCH_STANDARD', adRotationMode: 'OPTIMIZE' } } });
+      for (const k of g.exact) ops.push({ adGroupCriterionOperation: { create: { adGroup: G, status: 'ENABLED', keyword: { text: k, matchType: 'EXACT' } } } });
+      for (const k of g.broad) ops.push({ adGroupCriterionOperation: { create: { adGroup: G, status: 'ENABLED', keyword: { text: k, matchType: 'BROAD' } } } });
+      ops.push({ adGroupAdOperation: { create: { adGroup: G, status: 'ENABLED', ad: { finalUrls: [p.landing], responsiveSearchAd: { headlines: g.headlines.map((text) => ({ text })), descriptions: g.descriptions.map((text) => ({ text })) } } } } });
+    });
   } else {
     let n = -100; const links = [];
     const text = (t, fieldType) => { const r = R('assets', n--); ops.push({ assetOperation: { create: { resourceName: r, textAsset: { text: t } } } }); links.push({ asset: r, fieldType }); };
@@ -268,26 +446,46 @@ function printPlan(p, errors, warn, live) {
   L.push(`  Type: ${p.type === 'pmax' ? 'Performance Max' : 'Search'}  |  starts PAUSED  |  budget $${p.budget}/day (about $${(p.budget * 30.4).toFixed(0)}/month)`);
   if (p.type === 'search') L.push('  Networks: Google Search only (no Display, no search partners)');
   L.push(`  Goal: ${p.goal}  ->  conversion action: ${live?.gb ? (live.gb.action ? live.gb.action.name : 'NONE FOUND (' + (live.gb.all.join(', ') || 'no actions') + ')') : 'checked when connected'}`);
-  L.push(`  Bidding: ${live?.gb ? live.gb.biddingLabel : 'Maximize Conversions (Target CPA only after 30+ goal conversions a month)'}`);
+  L.push(`  Bidding: ${live?.gb ? live.gb.biddingLabel : (p.bidding === 'clicks' ? `Maximize Clicks, max $${p.maxCpc} a click` : 'Maximize Conversions (Target CPA only after 30+ goal conversions a month)')}`);
+  L.push(`  Budget rule: $${p.budget}/day at up to $${p.maxCpc} a click = at least ${Math.floor(p.budget / p.maxCpc)} clicks a day (the setup wants 5 to 10)`);
   L.push(`  Location: ${live?.geo ? live.geo.map((g) => g.label).join('; ') : (p.radius ? `${p.radius} miles around ${p.geoLabel}` : p.geoLabel)}  |  people IN the area (presence), not "interested in"`);
-  L.push(`  Schedule: ${p.schedule.length ? arg('schedule') : 'all hours'}  |  language ${p.language}`);
+  L.push(`  Starts: ${p.start}${p.end ? `  |  ends ${p.end}` : '  |  no end date'}  |  schedule: ${p.schedule.length ? arg('schedule') : 'all day'}  |  language ${p.language}  |  ad rotation: optimize`);
   L.push(`  Landing page: ${p.landing}`);
-  if (p.type === 'search') L.push(`  Keywords (phrase + exact): ${p.keywords.join(', ')}`);
-  else { L.push(`  Search themes: ${p.themes.join(', ')}`); L.push(`  Business name: ${p.businessName}`); L.push(`  Long headlines: ${p.longHeadlines.map((h) => `"${h}"`).join(' | ')}`); L.push(`  Images: ${Object.entries(p.images).map(([k, v]) => `${k} ${v.length}`).join(', ')}`); }
-  L.push(`  Headlines (${p.headlines.length}${p.drafted ? ', DRAFTED from settings, review them' : ''}):`); p.headlines.forEach((h) => L.push(`    [${String(h.length).padStart(2)}] ${h}`));
-  L.push(`  Descriptions (${p.descriptions.length}):`); p.descriptions.forEach((d) => L.push(`    [${String(d.length).padStart(2)}] ${d}`));
-  L.push(`  Standard negatives attached: ${p.negatives.ok.length}${p.negatives.skipped.length ? `; skipped ${p.negatives.skipped.length} that would block a target: ${p.negatives.skipped.join(', ')}` : ''}`);
+  if (p.type === 'search') {
+    L.push(`  Audiences (observation only): ${live?.aud ? (live.aud.map((a) => a.name).join(', ') || 'none found') : (p.audiences.join(', ') || 'none')}`);
+    for (const g of p.adGroups) {
+      L.push(`  AD GROUP "${g.name}": ${g.exact.length} exact [${g.exact.join('], [')}]${g.broad.length ? `  +  1 broad: ${g.broad[0]}` : ''}`);
+      L.push(`    Headlines (${g.headlines.length}${g.drafted ? ', DRAFTED from settings, review them' : ''}):`); g.headlines.forEach((h) => L.push(`      [${String(h.length).padStart(2)}] ${h}`));
+      L.push(`    Descriptions (${g.descriptions.length}):`); g.descriptions.forEach((d) => L.push(`      [${String(d.length).padStart(2)}] ${d}`));
+    }
+  } else {
+    L.push(`  Search themes: ${p.themes.join(', ')}`); L.push(`  Business name: ${p.businessName}`); L.push(`  Long headlines: ${p.longHeadlines.map((h) => `"${h}"`).join(' | ')}`); L.push(`  Images: ${Object.entries(p.images).map(([k, v]) => `${k} ${v.length}`).join(', ')}`);
+    L.push(`  Headlines (${p.headlines.length}${p.drafted ? ', DRAFTED from settings, review them' : ''}):`); p.headlines.forEach((h) => L.push(`    [${String(h.length).padStart(2)}] ${h}`));
+    L.push(`  Descriptions (${p.descriptions.length}):`); p.descriptions.forEach((d) => L.push(`    [${String(d.length).padStart(2)}] ${d}`));
+  }
+  const A = p.assets;
+  L.push(`  Sitelinks (${A.sitelinks.length}): ${A.sitelinks.map((s) => `${s.text} -> ${s.url}`).join(' | ') || 'none'}`);
+  L.push(`  Callouts (${A.callouts.length}): ${A.callouts.join(' | ') || 'none'}`);
+  L.push(`  Structured snippet "${A.snippetHeader}" (${A.snippets.length}): ${A.snippets.join(' | ') || 'none'}`);
+  L.push(`  Call: ${A.phone || 'none'}`);
+  L.push(`  Negatives attached (broad): ${p.negatives.ok.length}${p.negatives.skipped.length ? `; skipped ${p.negatives.skipped.length} that would block a target: ${p.negatives.skipped.join(', ')}` : ''}`);
   if (warn.length) L.push('WARNINGS:', ...warn.map((w) => '  - ' + w));
   if (errors.length) L.push('MUST FIX BEFORE BUILDING:', ...errors.map((e) => '  - ' + e));
   console.log(L.join('\n'));
 }
 
 async function main() {
+  if (cmd === 'template') {
+    if (has('json')) { console.log(JSON.stringify(PLAN_SHAPE, null, 2)); return; }
+    console.log(`Make the owner's own copy of the campaign template (never edit the master):\n  ${TEMPLATE_COPY_URL}\nFill the "${TABS.keywords}" and "${TABS.ads}" tabs for THIS business, then:\n  node pack.mjs campaign plan --sheet <link to the copy> --goal optin --landing https://... --geo "City, ST" --budget 50`);
+    return;
+  }
   if (!['plan', 'create'].includes(cmd)) { console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('*/')[0].replace(/^#!.*\n\/\*\n?/, '').replace(/^ \* ?/gm, '')); if (cmd) process.exitCode = 2; return; }
-  const { p, errors, warn } = readInputs();
+  const { p, errors, warn } = await readInputs();
   const live = {};
   if (connected() && !errors.length) {
     try { live.geo = await resolveGeo(p); } catch (e) { errors.push('location: ' + explain(e)); }
+    if (p.type === 'search' && p.audiences.length) { try { live.aud = p.audiencesResolved = await resolveAudiences(p.audiences); const miss = p.audiences.filter((n) => !live.aud.some((a) => a.asked === n)); if (miss.length) warn.push(`audience not found, skipped: ${miss.join(', ')}`); } catch (e) { warn.push('audiences skipped: ' + explain(e)); } }
     try { live.gb = await goalAndBidding(p); if (!live.gb.action && !has('no-goal')) errors.push(`no conversion action matches goal "${p.goal}". Set up tracking first (node pack.mjs tracking conversions), or name it: node pack.mjs set ... (config goalActions), or pass --no-goal (not advised)`); }
     catch (e) { errors.push('conversion goal: ' + explain(e)); }
   } else if (!connected()) warn.push('API check skipped: Google is not connected or no ad account is set (node pack.mjs doctor). Plan checked locally only.');
